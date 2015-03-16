@@ -26,6 +26,74 @@
 	# a3 = address of boot descriptor block
 	.set push
 	.set arch=octeon
+#ifdef CONFIG_HOTPLUG_CPU
+	b	7f
+	nop
+
+FEXPORT(octeon_hotplug_entry)
+	move	a0, zero
+	move	a1, zero
+	move	a2, zero
+	move	a3, zero
+7:
+#endif /* CONFIG_HOTPLUG_CPU */
+#ifdef CONFIG_CPU_LITTLE_ENDIAN
+	.set push
+	.set noreorder
+	/* Hotplugged CPUs enter in Big-Endian mode, switch here to LE */
+	dmfc0   v0, CP0_CVMCTL_REG
+	nop
+	ori     v0, v0, 2
+	nop
+	dmtc0   v0, CP0_CVMCTL_REG	/* little-endian */
+	nop
+	synci	0($0)
+	.set pop
+#endif /* CONFIG_CPU_LITTLE_ENDIAN */
+	mfc0	v0, CP0_STATUS
+	/* Force 64-bit addressing enabled */
+	ori	v0, v0, (ST0_UX | ST0_SX | ST0_KX)
+	mtc0	v0, CP0_STATUS
+
+	# Clear the TLB.
+	mfc0	v0, $16, 1	# Config1
+	dsrl	v0, v0, 25
+	andi	v0, v0, 0x3f
+	mfc0	v1, $16, 3	# Config3
+	bgez	v1, 1f
+	mfc0	v1, $16, 4	# Config4
+	andi	v1, 0x7f
+	dsll	v1, 6
+	or	v0, v0, v1
+1:				# Number of TLBs in v0
+
+	dmtc0	zero, $2, 0	# EntryLo0
+	dmtc0	zero, $3, 0	# EntryLo1
+	dmtc0	zero, $5, 0	# PageMask
+	dla	t0, 0xffffffff90000000
+10:
+	dmtc0	t0, $10, 0	# EntryHi
+	tlbp
+	mfc0	t1, $0, 0	# Index
+	bltz	t1, 1f
+	tlbr
+	dmtc0	zero, $2, 0	# EntryLo0
+	dmtc0	zero, $3, 0	# EntryLo1
+	dmtc0	zero, $5, 0	# PageMask
+	tlbwi			# Make it a 'normal' sized page
+	daddiu	t0, t0, 8192
+	b	10b
+1:
+	mtc0	v0, $0, 0	# Index
+	tlbwi
+	.set	noreorder
+	bne	v0, zero, 10b
+	 addiu	v0, v0, -1
+	.set	reorder
+
+	mtc0	zero, $0, 0	# Index
+	dmtc0	zero, $10, 0	# EntryHi
+
 	# Read the cavium mem control register
 	dmfc0	v0, CP0_CVMMEMCTL_REG
 	# Clear the lower 6 bits, the CVMSEG size
